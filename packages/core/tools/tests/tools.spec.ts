@@ -673,6 +673,78 @@ describe('ToolRuntime', () => {
     expect(err.message).toBe('unknown tool "ghost"')
   })
 
+  it('fuzzy matching: case-insensitive tool name lookup', async () => {
+    const ctx = await setup()
+    ctx.tools.register(echoTool)
+
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: 'Echo', arguments: { text: 'hi' } })
+    expect(result.isError).toBe(false)
+    expect(result.content[0]).toMatchObject({ text: 'hi' })
+  })
+
+  it('fuzzy matching: underscore/hyphen normalization', async () => {
+    const ctx = await setup()
+    ctx.tools.register(defineTool({
+      name: 'web_search',
+      description: 'search the web',
+      parameters: { query: { type: 'string' } },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      async execute(args) { return args.query ?? '' },
+    }))
+
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: 'web-search', arguments: { query: 'test' } })
+    expect(result.isError).toBe(false)
+    expect(result.content[0]).toMatchObject({ text: 'test' })
+  })
+
+  it('fuzzy matching: trailing/leading whitespace removal', async () => {
+    const ctx = await setup()
+    ctx.tools.register(echoTool)
+
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: '  echo  ', arguments: { text: 'hi' } })
+    expect(result.isError).toBe(false)
+    expect(result.content[0]).toMatchObject({ text: 'hi' })
+  })
+
+  it('fuzzy matching: multiple separator normalization', async () => {
+    const ctx = await setup()
+    ctx.tools.register(defineTool({
+      name: 'read_file',
+      description: 'read a file',
+      parameters: { path: { type: 'string' } },
+      output: {
+        schema: { type: 'string' },
+        render: (_args, value) => [{ type: 'text', text: value }],
+      },
+      async execute(args) { return args.path ?? '' },
+    }))
+
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: 'read-file', arguments: { path: '/test' } })
+    expect(result.isError).toBe(false)
+    expect(result.content[0]).toMatchObject({ text: '/test' })
+  })
+
+  it('fuzzy matching: exact match still works', async () => {
+    const ctx = await setup()
+    ctx.tools.register(echoTool)
+
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: 'echo', arguments: { text: 'hi' } })
+    expect(result.isError).toBe(false)
+    expect(result.content[0]).toMatchObject({ text: 'hi' })
+  })
+
+  it('fuzzy matching: unknown tool still returns error', async () => {
+    const ctx = await setup()
+    ctx.tools.register(echoTool)
+
+    const result = await ctx.tools.execute({ signal: testToolSignal, callId: CallId('c1'), name: 'nonexistent', arguments: {} })
+    expect(result.isError).toBe(true)
+    expect(result.content[0]).toMatchObject({ text: 'Error: unknown tool "nonexistent"' })
+  })
+
   it('lets a tools/pre-execute listener deny a call (permission pattern)', async () => {
     const ctx = await setup()
     ctx.tools.register(echoTool)

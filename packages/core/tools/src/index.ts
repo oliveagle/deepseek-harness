@@ -28,6 +28,20 @@ import type { ToolSdkSchema } from './ts-types.ts'
 import { renderToolsSdkPy } from './py-types.ts'
 
 /**
+ * Normalize a tool name for fuzzy matching.
+ * Handles deepseek model tool name variations:
+ * - Case insensitive (e.g., "Bash" matches "bash")
+ * - Underscore/hyphen equivalence (e.g., "bash_tool" matches "bash-tool")
+ * - Trailing/leading whitespace removal
+ */
+function normalizeToolName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_')
+}
+
+/**
  * Language → SDK-section renderer. The registry looks up the loaded
  * `ctx.codeRuntime.language` in this table when assembling the `tools:sdk`
  * section under a non-native mode; a runtime whose language is not a key
@@ -1202,7 +1216,20 @@ export class ToolRuntime extends Service {
    * @returns the definition the scope resolves, or undefined when none is visible.
    */
   get(name: string, scope?: ScopeKey): ToolDefinition | undefined {
-    return this.view(scope).visible.get(name)
+    const visible = this.view(scope).visible
+    // Exact match first (fast path)
+    const exact = visible.get(name)
+    if (exact !== undefined) return exact
+
+    // Fuzzy match fallback for deepseek model tool name variations
+    const normalizedName = normalizeToolName(name)
+    for (const [toolName, definition] of visible) {
+      if (normalizeToolName(toolName) === normalizedName) {
+        return definition
+      }
+    }
+
+    return undefined
   }
 
   /**
