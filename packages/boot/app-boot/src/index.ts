@@ -128,16 +128,24 @@ function isBootstrapOnly(name: string): boolean {
 }
 
 /**
- * Parse one directory's `.env` without applying it, rejecting bootstrap-only
- * names before any value is materialized.
- * @param binName - the diagnostic prefix on the thrown error.
+ * Parse one directory's `.env` without applying it. Bootstrap-only names are
+ * rejected before any value is materialized when `reject` is true; when false
+ * (the project layer — an arbitrary user project's own `.env`, which dsh reads
+ * opportunistically for credentials) they are dropped with a warning instead:
+ * such a file legitimately sets launch-only variables (e.g. `PYTHONPATH`) for
+ * its own tooling, and dsh must not crash on another project's `.env`. The
+ * bootstrap-only value is never applied either way — only the inherited
+ * environment may supply it.
+ * @param binName - the diagnostic prefix on diagnostics.
  * @param dir - the directory whose `.env` to read.
- * @param warn - sink for the one-line unreadable-file diagnostic.
- * @returns the parsed entries, or `undefined` when the file is absent or unreadable.
- * @throws when the file declares a name {@link isBootstrapOnly} rejects.
+ * @param warn - sink for the one-line diagnostic.
+ * @param reject - when true, a bootstrap-only name throws; when false, it is
+ *   skipped with a warning.
+ * @returns the validated entries, or `undefined` when the file is absent or unreadable.
+ * @throws when `reject` is true and the file declares a name {@link isBootstrapOnly} rejects.
  */
 function readEnvLayer(
-  binName: string, dir: string, warn: (line: string) => void,
+  binName: string, dir: string, warn: (line: string) => void, reject = true,
 ): { path: string; values: Record<string, string> } | undefined {
   const path = resolve(dir, '.env')
   let content: string
@@ -152,15 +160,25 @@ function readEnvLayer(
   }
   // Parse once so validation and materialization use exactly the same entries.
   const values = parseEnv(content) as Record<string, string>
-  for (const name of Object.keys(values)) {
-    if (!isBootstrapOnly(name)) continue
-    throw new Error(
-      `${binName}: ${path} sets "${name}", which only the launching environment may set`
-      + ' (it decides how this process starts, where its code and instructions load from, or how it'
-      + ` reaches the network); export ${name} instead of putting it in a .env file`,
+  const accepted: Record<string, string> = {}
+  for (const [name, value] of Object.entries(values)) {
+    if (!isBootstrapOnly(name)) {
+      accepted[name] = value
+      continue
+    }
+    if (reject) {
+      throw new Error(
+        `${binName}: ${path} sets "${name}", which only the launching environment may set`
+        + ' (it decides how this process starts, where its code and instructions load from, or how it'
+        + ` reaches the network); export ${name} instead of putting it in a .env file`,
+      )
+    }
+    warn(
+      `${binName}: ignoring "${name}" in ${path} — only the launching environment may set it; `
+      + 'export it in the shell instead\n',
     )
   }
-  return { path, values }
+  return { path, values: accepted }
 }
 
 /**
@@ -168,11 +186,16 @@ function readEnvLayer(
  * `.env` snapshot. The Harness home resolves before either file; both files
  * are checked before either is applied, and accepted values are materialized
  * without replacing inherited ones. The snapshot preserves which layer supplied each value.
+ *
+ * The project layer (the invoking directory's `.env`) is an arbitrary user
+ * project's file, so a bootstrap-only name there is dropped with a warning
+ * rather than crashing the launch; the user layer (`$DSH_HOME/.env`) is dsh's
+ * own configuration and still fails loud.
  * @param binName - the diagnostic prefix on the diagnostics.
  * @param cwd - the invoking directory whose `.env` is the project layer.
  * @param warn - sink for the one-line misconfiguration diagnostics.
  * @returns this run's frozen environment snapshot.
- * @throws when either file declares a bootstrap-only variable.
+ * @throws when the user-layer `.env` declares a bootstrap-only variable.
  */
 export function loadLayeredEnv(
   binName: string, cwd: string = process.cwd(),
@@ -180,8 +203,8 @@ export function loadLayeredEnv(
 ): LaunchEnvironmentSnapshot {
   const home = resolveDshHome()
   const inherited = { ...process.env } as Record<string, string>
-  // Parse both layers first: a rejection must not leave one file applied.
-  const project = readEnvLayer(binName, cwd, warn)
+  // Parse both layers first: a user-layer rejection must not leave the project layer applied.
+  const project = readEnvLayer(binName, cwd, warn, /* reject */ false)
   const user = home === resolve(cwd) ? undefined : readEnvLayer(binName, home, warn)
   // Apply the checked values without replacing a higher-ranked name.
   for (const layer of [project, user]) {

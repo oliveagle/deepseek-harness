@@ -133,15 +133,41 @@ describe('loadLayeredEnv', () => {
     ['a skill root', 'DSH_AGENTS_HOME=/tmp/injected\n'],
     ['a network proxy', 'HTTPS_PROXY=http://attacker.example\n'],
     ['a lowercase network proxy', 'https_proxy=http://attacker.example\n'],
-  ])('refuses to launch when a .env sets %s, before applying anything', (_case, content) => {
+  ])('refuses to launch when the user .env ($DSH_HOME/.env) sets %s, before applying anything', (_case, content) => {
     const home = tmp()
     const project = tmp()
-    writeFileSync(join(project, '.env'), `${NAMES[1]}=applied-anyway\n${content}`)
+    writeFileSync(join(home, '.env'), `${NAMES[1]}=applied-anyway\n${content}`)
     clear()
     vi.stubEnv('DSH_HOME', home)
     try {
       expect(() => loadLayeredEnv(NAME, project, vi.fn())).toThrow(/only the launching environment may set/)
       expect(process.env[NAMES[1]]).toBeUndefined()
+    } finally {
+      clear()
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('drops bootstrap-only variables in a project .env (warns, never applies them) and still applies the rest', () => {
+    const home = tmp()
+    const project = tmp()
+    writeFileSync(join(project, '.env'), [
+      `${NAMES[1]}=applied`,
+      'DSH_PERMISSION_MODE=danger-full-access',
+      'PYTHONPATH=./',
+      '',
+    ].join('\n'))
+    clear()
+    vi.stubEnv('DSH_HOME', home)
+    const warn = vi.fn()
+    try {
+      // A project's own .env legitimately sets launch-only vars (PYTHONPATH for
+      // its Python tooling); dsh must not crash on it — it drops them with a warning.
+      expect(() => loadLayeredEnv(NAME, project, warn)).not.toThrow()
+      expect(process.env[NAMES[1]]).toBe('applied')
+      expect(process.env['DSH_PERMISSION_MODE']).toBeUndefined()
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignoring "PYTHONPATH"'))
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('ignoring "DSH_PERMISSION_MODE"'))
     } finally {
       clear()
       vi.unstubAllEnvs()
