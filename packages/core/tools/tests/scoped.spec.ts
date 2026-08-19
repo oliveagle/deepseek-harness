@@ -84,6 +84,17 @@ describe('scoped tool registration', () => {
     expect(await run(ctx, 'mine')).toBe('Error: unknown tool "mine"')
   })
 
+  // A streamed tool call whose name fragment never arrived (observed on some
+  // gateway routes) dispatches with an empty name; the model must be told to
+  // resend the call instead of puzzling over an opaque `unknown tool ""`.
+  it('names the failure mode when a call arrives with no tool name', async () => {
+    const ctx = await mount()
+    ctx.tools.register(tool('bash'))
+    expect(await run(ctx, '')).toBe(
+      'Error: tool call arrived without a tool name — resend the complete tool call (tool name plus arguments)',
+    )
+  })
+
   it('scoped shadows global on a name conflict, in either registration order', async () => {
     const ctx = await mount()
     const { scope, key } = await mintAgentScope(ctx, 'a')

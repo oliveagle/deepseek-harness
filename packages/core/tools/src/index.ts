@@ -1571,7 +1571,17 @@ export class ToolRuntime extends Service {
     exec.signal = signal
     try {
       const tool = this.resolveExecution(exec.name, exec.agent, exec.parent !== undefined)
-      if (!tool) throw new ToolNotFoundError(exec.name)
+      // A stream can deliver tool-call arguments whose name fragment never
+      // arrived (observed on some gateway routes). The bare `unknown tool ""`
+      // gives the model nothing to correct, so name the failure mode instead.
+      if (!tool) {
+        throw exec.name === ''
+          ? new HarnessError(
+            'tool call arrived without a tool name — resend the complete tool call (tool name plus arguments)',
+            'UNKNOWN_TOOL',
+          )
+          : new ToolNotFoundError(exec.name)
+      }
       state.bodyInvoked = true
       const returned = await tool.execute(exec.arguments, exec)
       const result = this.createSuccessResult(exec, tool, returned)

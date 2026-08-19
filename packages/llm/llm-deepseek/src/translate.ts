@@ -68,7 +68,13 @@ function closeBlock(block: OpenBlock): ContentBlock {
     case 'reasoning': return { type: 'reasoning', text: block.text }
     case 'tool-call': return {
       type: 'tool-call',
-      id: CallId(block.callId ?? ''),
+      // Providers that never send ids (observed on some gateway routes)
+      // would otherwise replay empty tool_call ids back upstream, which
+      // the next request rejects with "duplicate tool_call id: " or
+      // "missing messages.tool_calls.id". Synthesize a unique fallback.
+      id: CallId(block.callId && block.callId.length > 0
+        ? block.callId
+        : `call_dsh_${crypto.randomUUID().replaceAll('-', '')}`),
       name: block.name ?? '',
       arguments: block.text,
     }
@@ -156,8 +162,17 @@ export async function* translate(payloads: AsyncIterable<string>): AsyncGenerato
           toolBlocks.set(call.index, block)
           yield { type: 'block-start', index: block.index, blockType: 'tool-call' }
         }
-        if (call.id !== undefined) block.callId = call.id
-        if (call.function?.name !== undefined) block.name = call.function.name
+        // OpenAI incremental tool_calls: only the FIRST fragment of a
+        // call carries id/name; continuation fragments either omit the
+        // fields (OpenAI, MiniMax) or send them as explicit nulls
+        // (xiaomi mimo). A null must NOT clobber the value captured
+        // from the first fragment — replaying the clobbered empty ids
+        // gets the next request rejected with
+        // "duplicate tool_call id: " / "missing messages.tool_calls.id".
+        if (typeof call.id === 'string' && call.id.length > 0) block.callId = call.id
+        if (typeof call.function?.name === 'string' && call.function.name.length > 0) {
+          block.name = call.function.name
+        }
         const fragment = call.function?.arguments ?? ''
         block.text += fragment
         yield {

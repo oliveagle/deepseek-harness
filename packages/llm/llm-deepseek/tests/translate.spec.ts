@@ -123,6 +123,58 @@ describe('translate: tool calls', () => {
     ])
   })
 
+  // xiaomi mimo continuation fragments carry explicit `id: null` /
+  // `name: null` — a legal OpenAI incremental shape meaning
+  // "unchanged". Regression: those nulls used to clobber the id/name
+  // captured from the first fragment, so the session replayed empty
+  // tool_call ids and the next upstream request failed with
+  // "duplicate tool_call id: " / "missing messages.tool_calls.id".
+  it('keeps the first-fragment id/name when continuations send explicit nulls (xiaomi mimo shape)', async () => {
+    const mimoFragment = (frag: string) => JSON.stringify({
+      choices: [{
+        delta: {
+          tool_calls: [{
+            index: 0,
+            id: null,
+            type: 'function',
+            function: { arguments: frag, name: null },
+          }],
+        },
+      }],
+    })
+    const chunks = await collect(translate(feed(
+      firstChunk,
+      JSON.stringify({ choices: [{ delta: { tool_calls: [{ index: 0, id: 'call_mimo_1', type: 'function', function: { name: 'get_weather', arguments: '' } }] } }] }),
+      mimoFragment('{"city": '),
+      mimoFragment('"Tokyo"}'),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 30, completion_tokens: 9 } }),
+      DONE,
+    )))
+    const blockEnd = chunks.find(c => c.type === 'block-end')
+    expect(blockEnd).toMatchObject({
+      block: { type: 'tool-call', id: 'call_mimo_1', name: 'get_weather', arguments: '{"city": "Tokyo"}' },
+    })
+  })
+
+  // Providers that never emit ids at all: synthesize unique fallbacks
+  // instead of empty strings, so replayed history keeps distinct ids.
+  it('synthesizes unique ids when the provider never sends one', async () => {
+    const chunks = await collect(translate(feed(
+      firstChunk,
+      { choices: [{ delta: { tool_calls: [{ index: 0, function: { name: 'get_weather', arguments: '{"city":"Tokyo"}' } }] } }] },
+      { choices: [{ delta: { tool_calls: [{ index: 1, function: { name: 'get_weather', arguments: '{"city":"Paris"}' } }] } }] },
+      { choices: [{ delta: {}, finish_reason: 'tool_calls' }], usage: { prompt_tokens: 30, completion_tokens: 9 } },
+      DONE,
+    )))
+    const calls = chunks.filter(c => c.type === 'block-end').map(c => (c as { block: { id: string } }).block.id)
+    expect(calls).toHaveLength(2)
+    for (const id of calls) {
+      expect(id).toMatch(/^call_dsh_[0-9a-f]+$/)
+      expect(id.length).toBeGreaterThan(0)
+    }
+    expect(new Set(calls).size).toBe(2)
+  })
+
   it('disambiguates parallel tool calls by wire index', async () => {
     const chunks = await collect(translate(feed(
       firstChunk,
@@ -312,10 +364,13 @@ describe('mapUsage', () => {
 })
 
 describe('translate: defensive tool-call branches', () => {
-  it('handles deltas that never carry id or name (empty-string fallbacks)', async () => {
+  it('handles deltas that never carry id or name (synthesized id, empty name)', async () => {
     const chunks = await collect(translate(feed(
       firstChunk,
       // Hypothetical lenient wire: argument fragments with no id/name at all.
+      // The id synthesizes a unique fallback (replaying an empty id upstream
+      // fails with "missing messages.tool_calls.id"); the name stays empty and
+      // the dispatch layer tells the model to resend the complete call.
       { choices: [{ delta: { tool_calls: [{ index: 0, function: { arguments: '{}' } }] } }] },
       { choices: [{ delta: {}, finish_reason: 'tool_calls' }] },
       DONE,
@@ -323,7 +378,16 @@ describe('translate: defensive tool-call branches', () => {
     expect(chunks).toEqual([
       { type: 'block-start', index: 0, blockType: 'tool-call' },
       { type: 'tool-call-delta', index: 0, id: '', argumentsDelta: '{}' },
-      { type: 'block-end', index: 0, block: { type: 'tool-call', id: '', name: '', arguments: '{}' } },
+      {
+        type: 'block-end',
+        index: 0,
+        block: {
+          type: 'tool-call',
+          id: expect.stringMatching(/^call_dsh_[0-9a-f]+$/),
+          name: '',
+          arguments: '{}',
+        },
+      },
       { type: 'finish', reason: { kind: 'tool-calls' } },
     ])
   })
