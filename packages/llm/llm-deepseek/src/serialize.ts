@@ -7,6 +7,7 @@
  * @module dsh-llm-deepseek/serialize
  */
 
+import { randomUUID } from 'node:crypto'
 import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type { WireMessage, WireRequest, WireTool } from './types.ts'
@@ -137,8 +138,66 @@ export function serializeMessages(messages: Message[]): WireMessage[] {
       })
     }
   }
+  return normalizeToolCallIdentity(wire)
+}
+
+/**
+ * Self-heal tool-call identity before the wire. Multi-channel gateways
+ * interleave providers whose tool_call ids use different shapes (`call_hex`
+ * vs bare UUID) and some routes strictly validate format and uniqueness
+ * (observed: xiaomi mimo). A session whose history replays duplicate, empty,
+ * or mixed-shape ids is rejected by such routes on EVERY retry — the
+ * "Internal error: turn failed" permanent-stall class. Rewrite every
+ * assistant `tool_calls[].id` into canonical `call_<hex>` (synthesizing for
+ * empty/unshapely ids, suffixing duplicates) and rewrite the paired
+ * `role:'tool'.tool_call_id` consistently so pairs stay matched.
+ * @param wire - serialized wire messages; mutated in place where repair is needed.
+ * @returns the same array, with tool-call identity healed.
+ */
+export function normalizeToolCallIdentity(wire: WireMessage[]): WireMessage[] {
+  const used = new Set<string>()
+  // Per raw id, the rewritten ids of assistant calls still awaiting their
+  // tool result — pairs are matched in order, because a raw id shared by two
+  // pairs cannot be told apart by value. Well-formed ids pass through
+  // verbatim; only the two proven poison classes are repaired: empty ids
+  // and duplicates (multi-channel failover can replay one id for two pairs,
+  // which strictly-validating routes reject on every retry).
+  const unmatched = new Map<string, string[]>()
+  const freshId = (raw: string): string => {
+    const base = raw.length > 0
+      ? raw
+      : `call_${randomUUID().replaceAll('-', '')}`
+    let next = base
+    let suffix = 2
+    while (used.has(next)) {
+      next = `${base}_${suffix}`
+      suffix += 1
+    }
+    used.add(next)
+    return next
+  }
+  for (const message of wire) {
+    if (message.role === 'assistant' && message.tool_calls !== undefined) {
+      for (const call of message.tool_calls) {
+        const raw = (call.id ?? '').toString()
+        const next = freshId(raw)
+        call.id = next
+        const queue = unmatched.get(raw)
+        if (queue === undefined) unmatched.set(raw, [next])
+        else queue.push(next)
+      }
+      continue
+    }
+    if (message.role === 'tool' && message.tool_call_id !== undefined) {
+      const raw = message.tool_call_id
+      const next = unmatched.get(raw)?.shift() ?? freshId(raw)
+      message.tool_call_id = next
+    }
+  }
   return wire
 }
+
+
 
 /**
  * Build the full wire request. Always streaming (`stream: true`, usage
