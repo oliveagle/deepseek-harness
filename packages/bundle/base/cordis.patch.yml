@@ -457,3 +457,10 @@
     # through a profile patch; no settings section is installed.
     - id: llm-openai
       name: '@deepseek-ai/dsh-llm-openai'
+    # The pure OpenAI RESPONSES adapter: POST {baseURL}/responses with only
+    # fields every Responses endpoint accepts — prompt_cache_retention /
+    # prompt_cache_options / service_tier are never sent (volc/minimax/kimi
+    # gateways 400 on them). Entry-owned configuration; pin baseURL/models/
+    # thinking through a profile patch (ds2 -> one-api coding_resps).
+    - id: llm-openai-responses
+      name: '@deepseek-ai/dsh-llm-openai-responses'

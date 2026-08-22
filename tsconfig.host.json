@@ -201,6 +201,7 @@
     { "path": "./packages/code-runtime/code-runtime-worker-thread" },
     { "path": "./packages/llm/llm-deepseek" },
     { "path": "./packages/llm/llm-openai" },
+    { "path": "./packages/llm/llm-openai-responses" },
     { "path": "./packages/llm/llm-pi-ai" },
     { "path": "./packages/shell/bash-local" },
     { "path": "./packages/shell/shell-env" },
