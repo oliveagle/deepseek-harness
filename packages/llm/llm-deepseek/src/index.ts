@@ -36,6 +36,7 @@ export {
 } from './adapter.ts'
 export type { DeepSeekAdapterOptions, DeepSeekCatalogModel, DeepSeekConnectionOptions } from './adapter.ts'
 export type { RequestDefaults } from './serialize.ts'
+export { normalizeToolCallIdentity } from './serialize.ts'
 export type * from './types.ts'
 
 export const name = 'llm-deepseek'

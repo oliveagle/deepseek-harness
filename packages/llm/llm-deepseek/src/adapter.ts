@@ -83,6 +83,16 @@ export interface DeepSeekAdapterOptions {
   resolveApiKey: (connection: DeepSeekConnectionOptions) => Promise<string>
   /** Resolve the harness-home anonymous id shared with telemetry and feedback. */
   resolveUserId: () => AnonymousUserId
+  /**
+   * Wire serializer override. Omitted (the only native configuration) uses
+   * this package's DeepSeek request builder; a sibling adapter reusing this
+   * transport (e.g. the pure-OpenAI llm-openai route with object-style tool
+   * call arguments) supplies its own. The hook receives the same inputs the
+   * native call site does and returns the already-shaped JSON body value.
+   */
+  serialize?: (options: GenerateOptions, defaults: RequestDefaults) => unknown
+  /** `providerInfo` display name override; omitted renders "DeepSeek". */
+  providerName?: string
 }
 
 /** Default maximum idle interval while an adapter stream read is outstanding. */
@@ -158,12 +168,15 @@ export function httpErrorCode(status: number, error?: WireError['error']): strin
  * map to `ABORTED`; the configured per-read idle watchdog maps to `TIMEOUT`.
  */
 export class DeepSeekAdapter extends LlmAdapter {
+  private readonly serialize: (options: GenerateOptions, defaults: RequestDefaults) => unknown
+
   constructor(private readonly config: DeepSeekAdapterOptions) {
     super()
+    this.serialize = config.serialize ?? serializeRequest
   }
 
   override providerInfo(provider: string): LlmProviderInfo {
-    return { id: provider, name: 'DeepSeek' }
+    return { id: provider, name: this.config.providerName ?? 'DeepSeek' }
   }
 
   override providerRetryPolicy(_provider: string): ResolvedRetryPolicy {
@@ -280,7 +293,7 @@ export class DeepSeekAdapter extends LlmAdapter {
     userId: AnonymousUserId,
     onComment: () => void,
   ): AsyncIterable<StreamChunk> {
-    const body = serializeRequest(options, connection.defaults)
+    const body = this.serialize(options, connection.defaults)
     // Prepared outside the try so the TRANSPORT label below covers exactly the
     // transport boundary, never a serialization failure.
     const payload = JSON.stringify(body)

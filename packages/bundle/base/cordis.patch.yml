@@ -449,3 +449,11 @@
     # choice.
     - id: llm-deepseek
       name: '@deepseek-ai/dsh-llm-deepseek'
+
+    # The pure OpenAI-style adapter: same chat-completions transport, but
+    # assistant history tool-call arguments travel as JSON objects and no
+    # DeepSeek-specific fields reach the wire. Entry-owned configuration —
+    # pin baseURL/models/requestExtras (e.g. sglang chat_template_kwargs)
+    # through a profile patch; no settings section is installed.
+    - id: llm-openai
+      name: '@deepseek-ai/dsh-llm-openai'
