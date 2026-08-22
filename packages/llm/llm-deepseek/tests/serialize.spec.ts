@@ -303,3 +303,54 @@ describe('review fixes: assistant content shapes', () => {
     expect(wire[0]).toMatchObject({ content: '' })
   })
 })
+
+describe('tool-call argument sanitization (session-poison self-heal)', () => {
+  it('rewrites an empty arguments string to "{}" so history stays replayable', () => {
+    const wire = serializeMessages([createMessage({
+      role: 'assistant',
+      content: [{ type: 'tool-call', id: CallId('call-1'), name: 'skill', arguments: '' }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])
+    const call = (wire[0] as { tool_calls: Array<{ function: { name: string; arguments: string } }> }).tool_calls[0]!
+    expect(call.function.arguments).toBe('{}')
+    expect(call.function.name).toBe('skill')
+  })
+
+  it('rewrites truncated/non-JSON arguments to "{}"', () => {
+    const wire = serializeMessages([createMessage({
+      role: 'assistant',
+      content: [{ type: 'tool-call', id: CallId('call-1'), name: 'bash', arguments: '{"command": "echo hi"' }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])
+    const call = (wire[0] as { tool_calls: Array<{ function: { arguments: string } }> }).tool_calls[0]!
+    expect(call.function.arguments).toBe('{}')
+  })
+
+  it('leaves valid JSON arguments untouched', () => {
+    const wire = serializeMessages([createMessage({
+      role: 'assistant',
+      content: [{ type: 'tool-call', id: CallId('call-1'), name: 'bash', arguments: '{"command":"pwd"}' }],
+      source: { kind: 'plugin', plugin: 'test' },
+    })])
+    const call = (wire[0] as { tool_calls: Array<{ function: { arguments: string } }> }).tool_calls[0]!
+    expect(call.function.arguments).toBe('{"command":"pwd"}')
+  })
+
+  it('keeps the paired tool message id matched after argument rewrite', () => {
+    const wire = serializeMessages([
+      createMessage({
+        role: 'assistant',
+        content: [{ type: 'tool-call', id: CallId('call-1'), name: 'skill', arguments: '' }],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+      createUserMessage({
+        content: [{ type: 'tool-result', toolCallId: CallId('call-1'), content: [{ type: 'text', text: 'err' }] }],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])
+    const assistant = wire[0] as { tool_calls: Array<{ id: string; function: { arguments: string } }> }
+    const tool = wire[1] as { tool_call_id: string }
+    expect(assistant.tool_calls[0]!.function.arguments).toBe('{}')
+    expect(assistant.tool_calls[0]!.id).toBe(tool.tool_call_id)
+  })
+})

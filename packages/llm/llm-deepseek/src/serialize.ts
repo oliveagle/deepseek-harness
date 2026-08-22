@@ -2,7 +2,9 @@
  * Serialize harness messages into DeepSeek chat completions. User text is joined; assistant text
  * becomes `content`, tool calls become `tool_calls`, and tool results become separate tool messages.
  * Assistant reasoning is replayed as `reasoning_content` only on tool-call turns, as required by
- * thinking-mode passback. Core image blocks are rejected explicitly because this wire route is text-only;
+ * thinking-mode passback. Assistant tool-call arguments are sanitized on the wire: empty or
+ * non-JSON `arguments` become `"{}"` so one malformed streamed call cannot poison every later
+ * turn of the session. Core image blocks are rejected explicitly because this wire route is text-only;
  * unknown declaration-merged block types retain the adapter's documented extension fallback.
  * @module dsh-llm-deepseek/serialize
  */
@@ -68,6 +70,27 @@ function assertTextOnly(blocks: readonly ContentBlock[]): void {
   }
 }
 
+/** Return `"{}"` when `args` is empty or not parseable JSON, otherwise `args` unchanged.
+ *
+ * sglang (and other OpenAI-compatible gateways) validate every assistant
+ * `tool_calls[].function.arguments` replayed in a multi-turn history and
+ * reject the whole request with 400 "Assistant tool call function.arguments
+ * must be valid JSON" when one is empty or truncated. A speculative-decoded
+ * model can emit a bare `<tool_call>` (e.g. `skill`) with no `<parameter>`
+ * block; the harness records it faithfully, then every later turn of the
+ * session dies with INVALID_REQUEST. Replacing the malformed value with the
+ * canonical empty-object JSON keeps the history replayable — the paired
+ * tool message is untouched, so the tool-call id stays matched. */
+function sanitizeToolArguments(args: string): string {
+  if (args.length === 0) return '{}'
+  try {
+    JSON.parse(args)
+    return args
+  } catch {
+    return '{}'
+  }
+}
+
 /** Serialize one assistant message (text + reasoning + tool calls). */
 function serializeAssistant(message: Message): WireMessage {
   const text = flattenText(message.content)
@@ -80,7 +103,7 @@ function serializeAssistant(message: Message): WireMessage {
     .map(block => ({
       id: block.id,
       type: 'function' as const,
-      function: { name: block.name, arguments: block.arguments },
+      function: { name: block.name, arguments: sanitizeToolArguments(block.arguments) },
     }))
 
   return {
