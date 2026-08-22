@@ -38,3 +38,13 @@ apps/web/dist/
 worktrees/
 .agents/worktrees/
 .typert-*/
+
+# local agent runtimes / codegraph data
+.omo/
+
+# superseded launchers (real ones live in ~/.agents/bin)
+/ds2
+/dsh-wrapper.sh
+
+# typert generator emits per-machine temp fixtures under a random suffix
+packages/typert/generator/tests/.generated-model-*/
